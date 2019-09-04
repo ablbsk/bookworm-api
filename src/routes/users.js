@@ -1,6 +1,7 @@
 import express from 'express';
 import User from '../models/user';
 import parseErrors from '../utils/parse-errors';
+import { sendConfirmationEmail } from '../mailer';
 
 const router = express.Router();
 
@@ -10,11 +11,15 @@ router.post('/', (req, res) => {
     email
   });
   user.setPassword(password);
+  user.setConfirmationToken();
   user
     .save()
-    .then(userRecord => res.json({
-      user: userRecord.toAuthJSON()
-    }))
+    .then(userRecord => {
+      sendConfirmationEmail(userRecord);
+      res.json({
+        user: userRecord.toAuthJSON()
+      })
+    })
     .catch(err => res.status(400).json({
       errors: parseErrors(err.errors)
     }));
