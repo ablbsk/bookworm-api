@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import User from '../models/user';
 
 export default (req, res, next) => {
   const header = req.headers.authorization || '';
@@ -13,8 +14,13 @@ export default (req, res, next) => {
           }
         });
       } else {
-        req.userEmail = decoded.email;
-        next();
+        User.findOne({
+          email: decoded.email
+        })
+          .then(user => {
+            req.currentUser = user;
+            next();
+          });
       }
     });
   } else {
