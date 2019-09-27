@@ -1,14 +1,15 @@
-import express from 'express';
-import User from '../models/user';
-import parseErrors from '../utils/parse-errors';
-import { sendConfirmationEmail } from '../mailer';
-import authenticate from '../middlewares/authenticate';
+import express from "express";
+import User from "../models/user";
+import parseErrors from "../utils/parse-errors";
+import { sendConfirmationEmail } from "../mailer";
+import authenticate from "../middlewares/authenticate";
 
 const router = express.Router();
 
-router.post('/', (req, res) => {
-  const { email, password } = req.body.user;
+router.post("/", (req, res) => {
+  const { username, email, password } = req.body.user;
   const user = new User({
+    username,
     email
   });
   user.setPassword(password);
@@ -19,19 +20,21 @@ router.post('/', (req, res) => {
       sendConfirmationEmail(userRecord);
       res.json({
         user: userRecord.toAuthJSON()
-      })
+      });
     })
-    .catch(err => res.status(400).json({
-      errors: parseErrors(err.errors)
-    }));
+    .catch(err =>
+      res.status(400).json({
+        errors: parseErrors(err.errors)
+      })
+    );
 });
 
-router.get('/current_user', authenticate, (req, res) => {
+router.get("/current_user", authenticate, (req, res) => {
   res.json({
     user: {
+      username: req.currentUser.username,
       email: req.currentUser.email,
-      confirmed: req.currentUser.confirmed,
-      /*username: req.currentUser.username*/
+      confirmed: req.currentUser.confirmed
     }
   });
 });

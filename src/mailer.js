@@ -19,10 +19,10 @@ export function sendConfirmationEmail(user) {
     from,
     to: user.email,
     subject: 'Welcome to Bookworm',
-    text: `
-    Welcome to Bookworm. Please, confirm your email.
+    html: `
+    <p>Welcome to Bookworm. Please, confirm your email:</p>
     
-    ${user.generateConfirmationUrl()}
+     <a href=${user.generateConfirmationUrl()}>Confirm email</a>
     `
   };
 
@@ -36,9 +36,9 @@ export function sendResetPasswordEmail(user) {
     to: user.email,
     subject: 'Reset Password',
     html: `
-   <p>To reset password follow this link</p>
+   <p>To reset password follow this link:</p>
     
-    <a href=${user.generateResetPasswordLink()}>Перейти</a>`
+    <a href=${user.generateResetPasswordLink()}>Reset password</a>`
 
   };
 
