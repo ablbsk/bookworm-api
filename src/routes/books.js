@@ -1,38 +1,74 @@
-import express from 'express';
-import request from 'request-promise';
-import { parseString } from 'xml2js';
-import authenticate from '../middlewares/authenticate';
-import Book from '../models/book';
-import parseErrors from '../utils/parse-errors';
+import express from "express";
+import request from "request-promise";
+import mongoose from 'mongoose';
+import { parseString } from "xml2js";
+import authenticate from "../middlewares/authenticate";
+import Book from "../models/book";
+import BookCollection from "../models/book-collection";
+import parseErrors from "../utils/parse-errors";
 
 const router = express.Router();
 router.use(authenticate);
 
 router.get('/', (req, res) => {
-  Book.find({ userId: req.currentUser._id })
-    .then(books => {
-      res.json({ books })
+  BookCollection.findById(req.currentUser.bookCollectionId)
+    .then(collection => {
+      const bookList = collection.list;
+      const ids = bookList.map(item => item.bookId);
+      Book.find({ _id: { $in: ids } })
+        .then(books => {
+          res.json({ books })
+        });
     })
 });
 
-router.post('/', (req, res) => {
+router.post("/", (req, res) => {
+  const { bookCollectionId } = req.currentUser;
   Book.create({
-    ...req.body.book,
-    userId: req.currentUser._id
+    ...req.body.book
   })
     .then(book => {
-      res.json({ book })
+      BookCollection.findOneAndUpdate(
+        { _id: bookCollectionId },
+        { $push: {
+          list: {
+            bookId: book._id,
+            readPages: 0
+          }
+        } },
+        { new: true }
+      ).then(result => {
+        if (!result) {
+          res.status(400).json({});
+        }
+      });
+      return res.json({ book });
     })
     .catch(err => {
-      res.status(400).json({ errors: parseErrors(err.errors) })
-    })
+      res.status(400).json({ errors: parseErrors(err.errors) });
+    });
 });
 
-router.get('/search', (req, res) => {
+router.post("/delete_book", (req, res) => {
+  Book.findByIdAndRemove(req.body.id)
+    .then(() => {
+      BookCollection.findByIdAndUpdate(
+        req.currentUser.bookCollectionId,
+        { $pull: { list: { bookId: new mongoose.Types.ObjectId(req.body.id) } } }
+      )
+        .then(collection => {
+          res.json({ collection })
+        });
+    })
+    .catch(err => {
+      res.status(400).json({ errors: parseErrors(err.errors) });
+  });
+});
+
+router.get("/search", (req, res) => {
   request
     .get(
-      `https://www.goodreads.com/search/index.xml?key=FJ8QTTCeXMYySmerRew60g&q=${req
-        .query.q}`
+      `https://www.goodreads.com/search/index.xml?key=FJ8QTTCeXMYySmerRew60g&q=${req.query.q}`
     )
     .then(result =>
       parseString(result, (err, goodreadsResult) =>
@@ -50,17 +86,20 @@ router.get('/search', (req, res) => {
     );
 });
 
-router.get('/fetchPages', (req, res) => {
-  const { goodreadsId }= req.query;
+router.get("/fetchPages", (req, res) => {
+  const { goodreadsId } = req.query;
   request
     .get(
       `https://www.goodreads.com/book/show.xml?key=FJ8QTTCeXMYySmerRew60g&id=${goodreadsId}`
     )
     .then(result =>
       parseString(result, (err, goodreadsResult) => {
-        const numPages = goodreadsResult.GoodreadsResponse.book[0].num_pages[0];
+        const objPath = goodreadsResult.GoodreadsResponse.book[0];
+        const numPages = objPath.num_pages[0];
         const pages = numPages ? parseInt(numPages, 10) : 0;
-          res.json({ pages })
+        res.json({
+          pages
+        });
       })
     );
 });

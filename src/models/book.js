@@ -15,9 +15,6 @@ const schema = new mongoose.Schema({
   },
   pages: {
     type: Number, required: true
-  },
-  userId: {
-    type: mongoose.Schema.Types.ObjectId, required: true
   }
 });
 

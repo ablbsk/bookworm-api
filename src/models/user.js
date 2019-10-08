@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import uniqueValidator from "mongoose-unique-validator";
+import BookCollection from "../models/book-collection";
 
 const schema = new mongoose.Schema(
   {
@@ -29,6 +30,9 @@ const schema = new mongoose.Schema(
     confirmationToken: {
       type: String,
       default: ""
+    },
+    bookCollectionId: {
+      type: mongoose.Schema.Types.ObjectId
     }
   },
   {
@@ -88,6 +92,6 @@ schema.methods.toAuthJSON = function toAuthJSON() {
   };
 };
 
-schema.plugin(uniqueValidator, {message: 'This {PATH} is already taken',});
+schema.plugin(uniqueValidator, { message: "This {PATH} is already taken" });
 
 export default mongoose.model('User', schema);
