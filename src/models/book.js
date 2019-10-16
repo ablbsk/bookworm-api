@@ -7,7 +7,7 @@ const schema = new mongoose.Schema({
   authors: {
     type: String, required: true
   },
-  cover: {
+  image_url: {
     type: String, required: true
   },
   goodreadsId: {
@@ -15,6 +15,9 @@ const schema = new mongoose.Schema({
   },
   pages: {
     type: Number, required: true
+  },
+  numberOfEntities: {
+    type: Number, default: 1
   }
 });
 
