@@ -1,7 +1,7 @@
 import express from "express";
 import request from "request-promise";
 import mongoose from "mongoose";
-import { parseString } from "xml2js";
+import {parseString} from "xml2js";
 import authenticate from "../middlewares/authenticate";
 import Book from "../models/book";
 import BookCollection from "../models/book-collection";
@@ -66,7 +66,7 @@ router.post("/delete_book", (req, res) => {
   const { bookCollectionId } = req.currentUser;
 
   Book.findById(id).then(function(book) {
-    if (book.numberOfEntities > 1) {
+    if (book.numberOfEntities > 1 || book.likeCounter >= 1) {
       numOfEntitiesDec(book);
     } else {
       Book.findByIdAndRemove(id)
@@ -177,5 +177,142 @@ router.get("/fetch_book_data", (req, res) => {
       })
     );
 });
+
+/* --------------------------------------------------------- */
+
+router.get("/check_like", (req, res) => {
+  const goodreadsId = req.query.id;
+  const { bookCollectionId } = req.currentUser;
+
+  findBookByGoodreadsId(goodreadsId)
+    .then(book => book ? checkInCollection(book._id) : res.json({ result: false }))
+    .catch(() => res.status(400).json("Server Error"));
+
+  function checkInCollection(id) {
+    findBookCollectionById(bookCollectionId)
+      .then(collection => {
+        const { likeBookList } = collection;
+        const result = likeBookList.indexOf(id);
+        result === -1 ? res.json({ result: false }) : res.json({ result: true });
+      })
+      .catch(() => res.status(400).json("Server Error"));
+  }
+});
+
+router.post("/add_like", (req, res) => {
+  const goodreadsId = req.body.id;
+  const { bookCollectionId } = req.currentUser;
+
+  findBookByGoodreadsId(goodreadsId)
+    .then(book => {
+    if (book) {
+      addBookId(book);
+    } else {
+      request.get(`https://www.goodreads.com/book/show.xml?key=FJ8QTTCeXMYySmerRew60g&id=${goodreadsId}`)
+        .then(result => fetchBookData(result))
+        .then(createBook)
+    }
+
+    function addBookId(entity) {
+      const id = entity._id;
+      BookCollection.findByIdAndUpdate(bookCollectionId,
+        { $push: {likeBookList: id} },
+        { new: true }
+      ).then(result => {
+        result ? likeCount(1, id) : res.status(400).json({});
+      });
+    }
+
+    function fetchBookData(result) {
+      return new Promise ((resolve, reject) => {
+        parseString(result, (err, goodreadsResult) => {
+          const path = goodreadsResult.GoodreadsResponse.book[0];
+          const book = {
+            goodreadsId: path.id[0],
+            image_url: path.image_url[0],
+            title: path.title[0],
+            description: path.description[0],
+            authors: path.authors[0].author[0].name[0],
+            average_rating: path.average_rating[0],
+            pages: path.num_pages[0],
+            publisher: path.publisher[0],
+            publication_day: path.publication_day[0],
+            publication_month: path.publication_month[0],
+            publication_year: path.publication_year[0],
+            format: path.format[0]
+          };
+          err ? reject(err) : resolve(book);
+        });
+      });
+    }
+
+    function createBook(data) {
+      Book.create({ ...data })
+        .then(book => addBookId(book))
+        .catch(err =>
+          res.status(400).json({ errors: parseErrors(err.errors) })
+        );
+    }
+
+    function likeCount(i, id) {
+      Book.findByIdAndUpdate(id,
+        {$inc: {likeCounter: i}},
+        {new: true}
+      ).then(book => {
+        book ? res.json({ like: true }) : res.status(400).json({});
+      });
+    }
+  });
+});
+
+router.post("/delete_like", (req, res) => {
+  const goodreadsId = req.body.id;
+  const { bookCollectionId } = req.currentUser;
+
+  Book.findOne({goodreadsId: goodreadsId})
+    .then(book => removeBookId(book));
+
+  function removeBookId(book) {
+    const id = book._id;
+    BookCollection.findByIdAndUpdate(bookCollectionId,
+      {$pull: {likeBookList: id}},
+      {new: true}
+    ).then(() => {
+      if (book.likeCounter > 1) {
+        return likeDec(-1, id);
+      } else {
+        return removeBook(id);
+      }
+    });
+  }
+
+  function likeDec(i, id) {
+    Book.findByIdAndUpdate(
+      id,
+      { $inc: { likeCounter: i } },
+      { new: true }
+    ).then(book => {
+      book ? res.json({ like: false }) : res.status(400).json({});
+    });
+  }
+
+  function removeBook(id) {
+    Book.findByIdAndRemove(id)
+      .then(res.json({ like: false }))
+      .catch(err => {
+        res.status(400).json({ errors: parseErrors(err.errors) });
+      });
+  }
+});
+
+/* ========================================================= */
+
+function findBookByGoodreadsId(goodreadsId) {
+  return Book.findOne({ goodreadsId: goodreadsId });
+}
+
+function findBookCollectionById(bookCollectionId) {
+  return BookCollection.findById(bookCollectionId)
+}
 
 export default router;
