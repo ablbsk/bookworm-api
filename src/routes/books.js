@@ -153,29 +153,10 @@ router.get("/search_by_page", (req, res) => {
 
 router.get("/fetch_book_data", (req, res) => {
   const { goodreadsId } = req.query;
-  request
-    .get(
-      `https://www.goodreads.com/book/show.xml?key=FJ8QTTCeXMYySmerRew60g&id=${goodreadsId}`
-    )
-    .then(result =>
-      parseString(result, (err, goodreadsResult) => {
-        const path = goodreadsResult.GoodreadsResponse.book[0];
-        res.json({
-          goodreadsId: path.id[0],
-          image_url: path.image_url[0],
-          title: path.title[0],
-          description: path.description[0],
-          authors: path.authors[0].author[0].name[0],
-          average_rating: path.average_rating[0],
-          pages: path.num_pages[0],
-          publisher: path.publisher[0],
-          publication_day: path.publication_day[0],
-          publication_month: path.publication_month[0],
-          publication_year: path.publication_year[0],
-          format: path.format[0]
-        });
-      })
-    );
+  getRequest(goodreadsId)
+    .then(result => fetchBookData(result))
+    .then(book => res.json({ book }))
+    .catch(() => res.status(400).json("Server Error"));
 });
 
 /* --------------------------------------------------------- */
@@ -208,58 +189,33 @@ router.post("/add_like", (req, res) => {
     if (book) {
       addBookId(book);
     } else {
-      request.get(`https://www.goodreads.com/book/show.xml?key=FJ8QTTCeXMYySmerRew60g&id=${goodreadsId}`)
+      getRequest(goodreadsId)
         .then(result => fetchBookData(result))
-        .then(createBook)
+        .then(createBook);
     }
 
     function addBookId(entity) {
       const id = entity._id;
-      BookCollection.findByIdAndUpdate(bookCollectionId,
+      return BookCollection.findByIdAndUpdate(bookCollectionId,
         { $push: {likeBookList: id} },
         { new: true }
       ).then(result => {
-        result ? likeCount(1, id) : res.status(400).json({});
-      });
-    }
-
-    function fetchBookData(result) {
-      return new Promise ((resolve, reject) => {
-        parseString(result, (err, goodreadsResult) => {
-          const path = goodreadsResult.GoodreadsResponse.book[0];
-          const book = {
-            goodreadsId: path.id[0],
-            image_url: path.image_url[0],
-            title: path.title[0],
-            description: path.description[0],
-            authors: path.authors[0].author[0].name[0],
-            average_rating: path.average_rating[0],
-            pages: path.num_pages[0],
-            publisher: path.publisher[0],
-            publication_day: path.publication_day[0],
-            publication_month: path.publication_month[0],
-            publication_year: path.publication_year[0],
-            format: path.format[0]
-          };
-          err ? reject(err) : resolve(book);
-        });
+        result ? likeCountInc(1, id) : res.status(400).json("Server Error");
       });
     }
 
     function createBook(data) {
       Book.create({ ...data })
         .then(book => addBookId(book))
-        .catch(err =>
-          res.status(400).json({ errors: parseErrors(err.errors) })
-        );
+        .catch(() => res.status(400).json("Server Error"));
     }
 
-    function likeCount(i, id) {
+    function likeCountInc(i, id) {
       Book.findByIdAndUpdate(id,
         {$inc: {likeCounter: i}},
         {new: true}
       ).then(book => {
-        book ? res.json({ like: true }) : res.status(400).json({});
+        book ? res.json({ like: true }) : res.status(400).json("Server Error");
       });
     }
   });
@@ -269,7 +225,7 @@ router.post("/delete_like", (req, res) => {
   const goodreadsId = req.body.id;
   const { bookCollectionId } = req.currentUser;
 
-  Book.findOne({goodreadsId: goodreadsId})
+  findBookByGoodreadsId(goodreadsId)
     .then(book => removeBookId(book));
 
   function removeBookId(book) {
@@ -277,32 +233,31 @@ router.post("/delete_like", (req, res) => {
     BookCollection.findByIdAndUpdate(bookCollectionId,
       {$pull: {likeBookList: id}},
       {new: true}
-    ).then(() => {
-      if (book.likeCounter > 1) {
-        return likeDec(-1, id);
-      } else {
-        return removeBook(id);
-      }
-    });
+    ).then(() => book.likeCounter > 1 ? likeCountDec(-1, id) : removeBook(id));
   }
 
-  function likeDec(i, id) {
-    Book.findByIdAndUpdate(
-      id,
+  function likeCountDec(i, id) {
+    Book.findByIdAndUpdate(id,
       { $inc: { likeCounter: i } },
       { new: true }
     ).then(book => {
-      book ? res.json({ like: false }) : res.status(400).json({});
+      book ? res.json({ like: false }) : res.status(400).json("Server Error");
     });
   }
 
   function removeBook(id) {
     Book.findByIdAndRemove(id)
       .then(res.json({ like: false }))
-      .catch(err => {
-        res.status(400).json({ errors: parseErrors(err.errors) });
-      });
+      .catch(() => res.status(400).json("Server Error"));
   }
+});
+
+/* --------------------------------------------------------- */
+
+router.get("/top_likes", (req, res) => {
+  Book.find().sort({ likeCounter: -1 }).limit(3)
+    .then(books => res.json({books}))
+    .catch(() => res.status(400).json("Server Error"));
 });
 
 /* ========================================================= */
@@ -313,6 +268,33 @@ function findBookByGoodreadsId(goodreadsId) {
 
 function findBookCollectionById(bookCollectionId) {
   return BookCollection.findById(bookCollectionId)
+}
+
+function getRequest(goodreadsId) {
+  return request.get(`https://www.goodreads.com/book/show.xml?key=FJ8QTTCeXMYySmerRew60g&id=${goodreadsId}`);
+}
+
+function fetchBookData(result) {
+  return new Promise ((resolve, reject) => {
+    parseString(result, (err, goodreadsResult) => {
+      const path = goodreadsResult.GoodreadsResponse.book[0];
+      const book = {
+        goodreadsId: path.id[0],
+        image_url: path.image_url[0],
+        title: path.title[0],
+        description: path.description[0],
+        authors: path.authors[0].author[0].name[0],
+        average_rating: path.average_rating[0],
+        pages: path.num_pages[0],
+        publisher: path.publisher[0],
+        publication_day: path.publication_day[0],
+        publication_month: path.publication_month[0],
+        publication_year: path.publication_year[0],
+        format: path.format[0]
+      };
+      err ? reject(err) : resolve(book);
+    });
+  });
 }
 
 export default router;
