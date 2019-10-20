@@ -48,7 +48,7 @@ const schema = new mongoose.Schema(
     },
     numberOfEntities: {
       type: Number,
-      default: 1,
+      default: 0,
       required: true
     },
     likeCounter: {

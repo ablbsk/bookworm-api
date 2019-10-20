@@ -20,45 +20,78 @@ router.get("/", (req, res) => {
   });
 });
 
-router.post("/", (req, res) => {
+router.get("/check_read_book", async function(req, res) {
+  const goodreadsId = req.query.id;
   const { bookCollectionId } = req.currentUser;
 
-  Book.findOne({ goodreadsId: req.body.book.goodreadsId }).then(function(book) {
-    if (book) {
-      bookCollectionUpdate(book);
-      updateNumOfEntities(book);
+  try {
+    const book = await Book.findOne({ goodreadsId });
+    if(book) {
+      const collection = await BookCollection.findById(bookCollectionId);
+      const result = await checkInCollection(book._id, collection);
+      await res.json({ result });
     } else {
-      Book.create({ ...req.body.book })
-        .then(bookCollectionUpdate)
-        .catch(err =>
-          res.status(400).json({ errors: parseErrors(err.errors) })
-        );
+      await res.json({ result: false });
     }
-  });
+  }
+  catch(e) {
+    res.status(400).json({});
+  }
 
-  const bookCollectionUpdate = book => {
-    BookCollection.findOneAndUpdate(
+  function checkInCollection(id, collection) {
+    const { list } = collection;
+    return list.findIndex(item => String(item.bookId) === String(id)) !== -1;
+  }
+});
+
+router.post("/", async function(req, res) {
+  const { goodreadsId } = req.body.book;
+  const { bookCollectionId } = req.currentUser;
+
+  try {
+    const book = await Book.findOne({ goodreadsId });
+    if (book) {
+      await bookCollectionUpdate(book);
+      await entitiesCountInc(book);
+      await res.json({ book });
+    } else {
+      // TODO Если ошибка ниже, то в Book коллекции висит ненужный документ.
+      const newBook = await Book.create({ ...req.body.book });
+      await bookCollectionUpdate(newBook);
+      await entitiesCountInc(newBook);
+      await res.json({ book: newBook });
+    }
+  }
+  catch(e) {
+    res.status(400).json({ errors: { global: "Error. Something went wrong." }});
+  }
+
+  /* --------------------------------------------- */
+
+  function bookCollectionUpdate(book) {
+    return BookCollection.findOneAndUpdate(
       { _id: bookCollectionId },
       {
         $push: {
-          list: { bookId: book._id, readPages: 0 }
+          list: {
+            bookId: book._id,
+            pages: book.pages,
+            readPages: 0
+          }
         }
       },
       { new: true }
-    ).then(result => {
-      result ? res.json({ book }) : res.status(400).json({});
-    });
-  };
-
-  const updateNumOfEntities = book => {
-    Book.findOneAndUpdate(
-      { _id: book._id },
-      { numberOfEntities: book.numberOfEntities + 1 },
-      { new: true }
-    ).then(result => {
-      result ? res.status(200).json({}) : res.status(400).json({});
-    });
+    )
   }
+
+  function entitiesCountInc(book) {
+    return Book.findOneAndUpdate(
+      { _id: book._id },
+      { $inc: { numberOfEntities: 1 } },
+      { new: true }
+    )
+  }
+
 });
 
 router.post("/delete_book", (req, res) => {
@@ -165,18 +198,14 @@ router.get("/check_like", (req, res) => {
   const goodreadsId = req.query.id;
   const { bookCollectionId } = req.currentUser;
 
-  findBookByGoodreadsId(goodreadsId)
+  Book.findOne({ goodreadsId })
     .then(book => book ? checkInCollection(book._id) : res.json({ result: false }))
     .catch(() => res.status(400).json("Server Error"));
 
-  function checkInCollection(id) {
-    findBookCollectionById(bookCollectionId)
-      .then(collection => {
-        const { likeBookList } = collection;
-        const result = likeBookList.indexOf(id);
-        result === -1 ? res.json({ result: false }) : res.json({ result: true });
-      })
-      .catch(() => res.status(400).json("Server Error"));
+  async function checkInCollection(id) {
+    const collection = await BookCollection.findById(bookCollectionId);
+    const { likeBookList } = collection;
+    return !likeBookList.indexOf(id);
   }
 });
 
@@ -184,7 +213,7 @@ router.post("/add_like", (req, res) => {
   const goodreadsId = req.body.id;
   const { bookCollectionId } = req.currentUser;
 
-  findBookByGoodreadsId(goodreadsId)
+  Book.findOne({ goodreadsId })
     .then(book => {
     if (book) {
       addBookId(book);
@@ -225,7 +254,7 @@ router.post("/delete_like", (req, res) => {
   const goodreadsId = req.body.id;
   const { bookCollectionId } = req.currentUser;
 
-  findBookByGoodreadsId(goodreadsId)
+  Book.findOne({ goodreadsId })
     .then(book => removeBookId(book));
 
   function removeBookId(book) {
@@ -255,20 +284,14 @@ router.post("/delete_like", (req, res) => {
 /* --------------------------------------------------------- */
 
 router.get("/top_likes", (req, res) => {
-  Book.find().sort({ likeCounter: -1 }).limit(3)
-    .then(books => res.json({books}))
+  Book.find()
+    .sort({ likeCounter: -1 })
+    .limit(3)
+    .then(books => res.json({ books }))
     .catch(() => res.status(400).json("Server Error"));
 });
 
 /* ========================================================= */
-
-function findBookByGoodreadsId(goodreadsId) {
-  return Book.findOne({ goodreadsId: goodreadsId });
-}
-
-function findBookCollectionById(bookCollectionId) {
-  return BookCollection.findById(bookCollectionId)
-}
 
 function getRequest(goodreadsId) {
   return request.get(`https://www.goodreads.com/book/show.xml?key=FJ8QTTCeXMYySmerRew60g&id=${goodreadsId}`);
