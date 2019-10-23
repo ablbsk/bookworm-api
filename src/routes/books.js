@@ -55,7 +55,6 @@ router.post("/", async function(req, res) {
       await entitiesCountInc(book);
       await res.json({ book });
     } else {
-      // TODO Если ошибка ниже, то в Book коллекции висит ненужный документ.
       const newBook = await Book.create({ ...req.body.book });
       await bookCollectionUpdate(newBook);
       await entitiesCountInc(newBook);
@@ -94,45 +93,42 @@ router.post("/", async function(req, res) {
 
 });
 
-router.post("/delete_book", (req, res) => {
-  const { id } = req.body;
+router.post("/delete_book", async function(req, res) {
+  const goodreadsId = req.body.id;
   const { bookCollectionId } = req.currentUser;
 
-  Book.findById(id).then(function(book) {
+  try {
+    const book = await Book.findOne({ goodreadsId });
     if (book.numberOfEntities > 1 || book.likeCounter >= 1) {
-      numOfEntitiesDec(book);
+      await numOfEntitiesDec(book._id);
+      await bookCollectionUpdate(book._id);
     } else {
-      Book.findByIdAndRemove(id)
-        .then(bookCollectionUpdate())
-        .catch(err => {
-          res.status(400).json({ errors: parseErrors(err.errors) });
-        });
+      await Book.findOneAndRemove({ goodreadsId });
+      await bookCollectionUpdate(book._id);
     }
-  });
+    await res.json({ readStatus: false });
+  }
+  catch(e) {
+    res.status(400).json({ errors: { global: "Error. Something went wrong." }});
+  }
 
-  const numOfEntitiesDec = () => {
-    Book.findByIdAndUpdate(
+  /* --------------------------------------------- */
+
+  function numOfEntitiesDec(id) {
+    return Book.findByIdAndUpdate(
       id,
-      { $inc: { numberOfEntities: - 1 } },
+      { $inc: { numberOfEntities: -1 } },
       { new: true }
-    ).then(result => {
-      result ? bookCollectionUpdate() : res.status(400).json({});
-    });
-  };
+    )
+  }
 
-  const bookCollectionUpdate = () => {
-    BookCollection.findByIdAndUpdate(
+  function bookCollectionUpdate(id) {
+    return BookCollection.findByIdAndUpdate(
       bookCollectionId,
-      {
-        $pull: {
-          list: { bookId: new mongoose.Types.ObjectId(id) }
-        }
-      },
+      { $pull: { list: { bookId: id } } },
       { new: true }
-    ).then(result => {
-      result ? res.status(200).json({}) : res.status(400).json({});
-    });
-  };
+    )
+  }
 });
 
 router.get("/search", (req, res) => {
@@ -194,16 +190,27 @@ router.get("/fetch_book_data", (req, res) => {
 
 /* --------------------------------------------------------- */
 
-router.get("/check_like", (req, res) => {
+router.get("/check_like", async function(req, res) {
   const goodreadsId = req.query.id;
   const { bookCollectionId } = req.currentUser;
 
-  Book.findOne({ goodreadsId })
-    .then(book => book ? checkInCollection(book._id) : res.json({ result: false }))
-    .catch(() => res.status(400).json("Server Error"));
+  try {
+    const book = await Book.findOne({ goodreadsId });
+    if (book) {
+      const collection = await BookCollection.findById(bookCollectionId);
+      const result = await checkInCollection(book._id, collection);
+      await res.json({ result });
+    } else {
+      await res.json({ result: false });
+    }
+  }
+  catch(e) {
+    await res.json({ result: false });
+  }
 
-  async function checkInCollection(id) {
-    const collection = await BookCollection.findById(bookCollectionId);
+  /* --------------------------------------------- */
+
+  async function checkInCollection(id, collection) {
     const { likeBookList } = collection;
     return !likeBookList.indexOf(id);
   }
