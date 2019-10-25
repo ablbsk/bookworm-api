@@ -1,11 +1,9 @@
 import express from "express";
 import request from "request-promise";
-import mongoose from "mongoose";
-import {parseString} from "xml2js";
+import { parseString } from "xml2js";
 import authenticate from "../middlewares/authenticate";
 import Book from "../models/book";
 import BookCollection from "../models/book-collection";
-import parseErrors from "../utils/parse-errors";
 
 const router = express.Router();
 router.use(authenticate);
@@ -40,7 +38,8 @@ router.get("/check_read_book", async function(req, res) {
 
   function checkInCollection(id, collection) {
     const { list } = collection;
-    return list.findIndex(item => String(item.bookId) === String(id)) !== -1;
+    const i = list.findIndex(item => item.bookId.equals(id));
+    return (i !== -1) ? {read: true, readPages: list[i].readPages} : false;
   }
 });
 
@@ -101,12 +100,11 @@ router.post("/delete_book", async function(req, res) {
     const book = await Book.findOne({ goodreadsId });
     if (book.numberOfEntities > 1 || book.likeCounter >= 1) {
       await numOfEntitiesDec(book._id);
-      await bookCollectionUpdate(book._id);
     } else {
       await Book.findOneAndRemove({ goodreadsId });
-      await bookCollectionUpdate(book._id);
     }
-    await res.json({ readStatus: false });
+    await bookCollectionUpdate(book._id);
+    await res.json({ readStatus: false, id: book._id });
   }
   catch(e) {
     res.status(400).json({ errors: { global: "Error. Something went wrong." }});
@@ -180,12 +178,16 @@ router.get("/search_by_page", (req, res) => {
     );
 });
 
-router.get("/fetch_book_data", (req, res) => {
+router.get("/fetch_book_data", async function(req, res) {
   const { goodreadsId } = req.query;
-  getRequest(goodreadsId)
-    .then(result => fetchBookData(result))
-    .then(book => res.json({ book }))
-    .catch(() => res.status(400).json("Server Error"));
+  try {
+    const resultRequest = await getRequest(goodreadsId);
+    const book = await fetchBookData(resultRequest);
+    await res.json({ book });
+  }
+  catch(e) {
+    res.status(400).json("Server Error");
+  }
 });
 
 /* --------------------------------------------------------- */
@@ -288,14 +290,42 @@ router.post("/delete_like", (req, res) => {
   }
 });
 
+router.get("/get_top", async function(req, res) {
+  const num = 2;
+  const topLikeBooks = await Book.find()
+    .sort({ likeCounter: -1 })
+    .limit(num);
+
+  const topReadBooks = await Book.find()
+    .sort({ numberOfEntities: -1 })
+    .limit(num);
+
+  await res.json({ books: { topLikeBooks, topReadBooks } });
+});
+
 /* --------------------------------------------------------- */
 
-router.get("/top_likes", (req, res) => {
-  Book.find()
-    .sort({ likeCounter: -1 })
-    .limit(3)
-    .then(books => res.json({ books }))
-    .catch(() => res.status(400).json("Server Error"));
+router.post("/save_progress", async function(req, res) {
+  const readPages = req.body.num;
+  const goodreadsId = req.body.id;
+  const { bookCollectionId } = req.currentUser;
+
+  try {
+    const book = await Book.findOne({ goodreadsId });
+    await bookCollectionUpdate(book._id);
+    await res.json({ readPages });
+  }
+  catch(e) {
+    res.status(400).json({ errors: { global: "Error. Something went wrong." }});
+  }
+
+  function bookCollectionUpdate(id) {
+    return BookCollection.update(
+      { _id: bookCollectionId, "list.bookId": id },
+      { $set: { "list.$.readPages": readPages } },
+      { new: true }
+    )
+  }
 });
 
 /* ========================================================= */
