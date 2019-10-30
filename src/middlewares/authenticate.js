@@ -14,19 +14,14 @@ export default (req, res, next) => {
           }
         });
       } else {
-        User.findOne({
-          email: decoded.email
-        }).then(user => {
+        User.findOne({ email: decoded.email }).then(user => {
           req.currentUser = user;
           next();
         });
       }
     });
   } else {
-    res.status(401).json({
-      errors: {
-        global: "No token"
-      }
-    });
+    req.currentUser = false;
+    next();
   }
 };
