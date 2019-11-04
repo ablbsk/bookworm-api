@@ -1,6 +1,7 @@
 import express from "express";
 import request from "request-promise";
 import { parseString } from "xml2js";
+import parseErrors from "../utils/parse-errors";
 import authenticate from "../middlewares/authenticate";
 import Book from "../models/book";
 import BookCollection from "../models/book-collection";
@@ -124,15 +125,18 @@ router.post("/delete_book", authenticate, async function(req, res) {
   }
 });
 
-router.get("/search", (req, res) => {
-  request
-    .get(
-      `https://www.goodreads.com/search/index.xml?key=FJ8QTTCeXMYySmerRew60g&q=${req.query.q}`
-    )
-    .then(result =>
-      parseString(result, (err, goodreadsResult) =>
+router.get("/search", async function (req, res) {
+  const { q } = req.query;
+
+  try {
+    const resultRequest = await getSearchRequest(q);
+    parseString(resultRequest, (err, goodreadsResult) => {
+      const path = goodreadsResult.GoodreadsResponse.search[0];
+      if (path["total-results"][0] === "0") {
+        res.json({ books: "Not found..." })
+      } else {
         res.json({
-          books: goodreadsResult.GoodreadsResponse.search[0].results[0].work.map(
+          books: path.results[0].work.map(
             work => ({
               goodreadsId: work.best_book[0].id[0]._,
               title: work.best_book[0].title[0],
@@ -141,48 +145,56 @@ router.get("/search", (req, res) => {
             })
           )
         })
-      )
-    );
+      }
+    });
+  }
+  catch(e) {
+    await res.status(500).json({ error: 'Error. Something went wrong...' });
+  }
 });
 
-router.get("/search_by_page", (req, res) => {
-  request
-    .get(
-      `https://www.goodreads.com/search/index.xml?key=FJ8QTTCeXMYySmerRew60g&q=${req.query.q}&page=${req.query.page}`
-    )
-    .then(result =>
-      parseString(result, (err, goodreadsResult) =>
+router.get("/search_by_page", async function (req, res) {
+  const { q, page } = req.query;
+
+  try {
+    const resultRequest = await getSearchRequest(q, page);
+    parseString(resultRequest, (err, goodreadsResult) => {
+      const path = goodreadsResult.GoodreadsResponse.search[0];
+      if (path["total-results"][0] === "0") {
+        res.json({books: "Not found..."})
+      } else {
         res.json({
-          books: goodreadsResult.GoodreadsResponse.search[0].results[0].work.map(
+          books: path.results[0].work.map(
             work => ({
               goodreadsId: work.best_book[0].id[0]._,
               title: work.best_book[0].title[0],
               authors: work.best_book[0].author[0].name[0],
               image_url: work.best_book[0].small_image_url[0],
-              rating: work.average_rating[0]
+              rating: typeof(work.average_rating[0]) === 'object'
+                ? 0 : work.average_rating[0]
             })
           ),
-          query_time_seconds:
-            goodreadsResult.GoodreadsResponse.search[0][
-              "query-time-seconds"
-            ][0],
-          total_results:
-            goodreadsResult.GoodreadsResponse.search[0]["total-results"][0]
+          query_time_seconds: path["query-time-seconds"][0],
+          total_results: path["total-results"][0]
         })
-      )
-    );
+      }
+    });
+  }
+  catch(e) {
+    await res.status(500).json({ error: 'Error. Something went wrong...' });
+  }
 });
 
 router.get("/fetch_book_data", authenticate, async function(req, res) {
   const { goodreadsId } = req.query;
 
   try {
+    const book = await Book.findOne({ goodreadsId });
     const resultRequest = await getRequest(goodreadsId);
     const data = await fetchBookData(resultRequest);
-    const book = await Book.findOne({ goodreadsId });
 
     if (!req.currentUser) {
-      await res.json({ book });
+      await res.json({ book: data });
     }
 
     const { bookCollectionId } = req.currentUser;
@@ -209,9 +221,10 @@ router.get("/fetch_book_data", authenticate, async function(req, res) {
         }
       });
     }
-  } catch (e) {
-    res.status(500).json("Server Error");
+  } catch(e) {
+    await res.status(500).json({ error: 'Error. Something went wrong...' });
   }
+
 });
 
 router.post("/add_like", authenticate, async function(req, res) {
@@ -295,16 +308,22 @@ router.post("/delete_like", authenticate, async function(req, res) {
 });
 
 router.get("/get_top", async function(req, res) {
-  const num = 2;
-  const topLikeBooks = await Book.find()
-    .sort({ likeCounter: -1 })
-    .limit(num);
+  try {
+    const num = 2;
+    const topLikeBooks = await Book.find()
+      .sort({ likeCounter: -1 })
+      .limit(num);
 
-  const topReadBooks = await Book.find()
-    .sort({ numberOfEntities: -1 })
-    .limit(num);
+    const topReadBooks = await Book.find()
+      .sort({ numberOfEntities: -1 })
+      .limit(num);
 
-  await res.json({ books: { topLikeBooks, topReadBooks } });
+    await res.json({ books: { topLikeBooks, topReadBooks } });
+  }
+  catch(e) {
+    await res.status(500).json({ error: 'Error. Something went wrong...' });
+  }
+
 });
 
 /* --------------------------------------------------------- */
@@ -319,9 +338,7 @@ router.post("/save_progress", authenticate, async function(req, res) {
     await bookCollectionUpdate(book._id);
     await res.json({ progress: { goodreadsId: book.goodreadsId, readPages } });
   } catch (e) {
-    res
-      .status(500)
-      .json({ errors: { global: "Error. Something went wrong." } });
+    await res.status(500).json({ error: 'Error. Something went wrong...' });
   }
 
   function bookCollectionUpdate(id) {
@@ -337,6 +354,12 @@ router.post("/save_progress", authenticate, async function(req, res) {
 
 function getRequest(goodreadsId) {
   return request.get(`https://www.goodreads.com/book/show.xml?key=FJ8QTTCeXMYySmerRew60g&id=${goodreadsId}`);
+}
+
+function getSearchRequest(query, page = 1) {
+  return request.get(
+      `https://www.goodreads.com/search/index.xml?key=FJ8QTTCeXMYySmerRew60g&q=${query}&page=${page}`
+    )
 }
 
 function fetchBookData(result) {
